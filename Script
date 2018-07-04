@@ -1,0 +1,412 @@
+# Before I show the way I did it, I want to notify in advance that I used a Mac,
+# whose OS X is 10.11, and I used R 3.5.0 binary, and RStudio 1.1.453.
+
+rm(list = ls())
+setwd("~/Desktop/Fortune 500/fortune500 web")
+
+#install and loading the rvest web scraping package
+# install.packages("rvest")
+library(rvest)
+
+# load other packages
+library(XML)
+library(RCurl)
+library(plyr)
+library(stringr)
+library(tidyr)
+
+
+# install RSelenium and ensure Selenium server is running-------------------------------------------------------
+
+# Here it took me a lot of time, bc RSelenium is archived and lack of a few dependencies. 
+# In a nutshell, to install RSelenium, I need wdman and binman. And depending on the version of R,
+# one may need to also install a few other dependent packages according to the warning messages
+# provided by Rstudio. 
+# refer to: https://stackoverflow.com/questions/42440911/error-while-installing-rselenium-in-r
+
+library(devtools)
+
+install_version("binman", version = "0.1.0", repos = "https://cran.uni-muenster.de/")
+library(binman)
+
+install_version("wdman", version = "0.2.2", repos = "https://cran.uni-muenster.de/")
+library(wdman)
+
+install_version("RSelenium", version = "1.7.1", repos = "https://cran.uni-muenster.de/")
+library(RSelenium)
+
+# To run this server, I need Docker, a container, which could be obtained by searching
+# "Docker for mac", and register on the site, log in and download. 
+# Then I need to download and install a Java Development Kit (JDK) to enable my mac
+# to run the Selenium Server Binary. I download from Oracle site:
+# http://www.oracle.com/technetwork/java/javase/downloads/jdk8-downloads-2133151.html
+# version:  Java SE Development Kit 8u171.
+# Subsequently, I need to run a Selenium Server binary, which could be downloaded here:
+# http://selenium-release.storage.googleapis.com/index.html. Then I need to run a command
+# in my "terminal", which is "java -jar /Users/Guest/Downloads/selenium-server-standalone-3.8.0.jar"
+# The part after "java -jar ", including the file directory and the .jar file name, 
+# which depends on the version you download. After running this command, when it reads:
+# "Selenium Server is up and running" in the terminal, you are good to go. 
+
+# Now it's time to build the Selenium Server
+remDr <- remoteDriver(remoteServerAddr = "localhost" 
+                      , port = 4444L
+                      , browserName = "firefox"
+)
+
+# Get the status of your server
+remDr$getStatus()
+
+# start to scrape scroll down page ----------------------------------------
+
+# The following command opens a web browser, when you see Error message, don't worry, 
+# download the latest Firefox, since the RSelenium sets Firefox as default. 
+# I bet there's a way to revise the browser default, I haven't figured out yet. 
+# To accelerate my project, I downloaded Firefox. 
+# One more issue, with Firefox 48+ using Gecko engine, 
+# you’ll need to install geckodriver in order to use Selenium. The easiest way is to use
+# Homebrew (install instruction here "https://brew.sh", just paste the line of command 
+# into your terminal and run). After that, execute the command: $ brew install geckodriver.
+# For this brew, you need at least 10.11 OS X.
+# Also, there is another way to install geckodriver, which could be referred here. 
+
+remDr$open()
+
+
+#navigate to your page
+remDr$navigate("http://fortune.com/fortune500/list/")
+
+#scroll down 10 times, waiting for the page to load 5 seconds at each time
+# By doing this, I can get 500 companies. 
+for(i in 1:10){      
+  remDr$executeScript(paste("scroll(0,",i*10000,");"))
+  Sys.sleep(5)    
+}
+
+#get the page html
+page_source<-remDr$getPageSource()
+
+#parse it
+# html(page_source[[1]]) %>% html_nodes(".product-itm-price-new") %>%
+#   html_text()
+# html is deprecated, so I use the new way here. 
+ftn500lst <- read_html(page_source[[1]]) %>% 
+  html_nodes("li") %>% 
+  html_nodes("span") %>% 
+  html_text() 
+
+
+remDr$close()
+
+# check the data
+class(ftn500lst)
+tail(ftn500lst)
+
+# clean the data, remove the first 12 rows of not related data
+
+vec.ftn500lst <- ftn500lst[-c(1:12)]
+
+# create a empty matrix for storing the ftn500 data
+mtx.ftn500lst <- matrix(NA, nrow = 500, ncol = 3)
+
+# To put the data in vec.ftn500lst which contains rank, company name, and revenue into the 
+# matrix. 
+mtx.ftn500lst[,1] <- vec.ftn500lst[seq(1, length(vec.ftn500lst), 3)]
+vec.ftn500lst.2 <- vec.ftn500lst[-c(seq(from = 1, to = 1500, by = 3))]
+
+
+mtx.ftn500lst[,2] <- vec.ftn500lst.2[seq(1, length(vec.ftn500lst.2), 2)]
+vec.ftn500lst.3 <- vec.ftn500lst.2[-c(seq(from = 1, to = 1500, by = 2))]
+
+mtx.ftn500lst[,3] <- vec.ftn500lst.3
+
+mtx.ftn500lst
+
+# Convert the matrix into dataframe and name the columns.
+df.ftn500lst <- as.data.frame(mtx.ftn500lst)
+class(df.ftn500lst)
+View(df.ftn500lst)
+colnames(df.ftn500lst) = c("Rank", "Company", "Revenue($M)")
+
+# Rename the Fortune 500 2018 dataframe to "ftn2018" to keep 
+# in correspondence with "ftn2016".
+ftn2018 <- df.ftn500lst
+
+# Compare the 2018 and 2016 company data ----------------------------------
+library(readxl)
+ftn2016 <- read_excel("Desktop/Fortune 500/fortune500 web/Fortune500 2016 Clean.xlsx")
+
+class(ftn2016)
+ftn2016 <- as.data.frame(ftn2016)
+
+vec.com2018 <- ftn2018[,2]
+class(vec.com2018)
+
+vec.com2016 <- ftn2016[,2]
+class(vec.com2016)
+vec.com2016 <- vec.com2016[c(1:500)]
+
+# use the sediff funtion to see which companies in 2018 list but not in 2016 list
+uniq.2018 <- setdiff(vec.com2018, vec.com2016)
+length(uniq.2018) # 114
+class(uniq.2018)
+
+which(uniq.2018 %in% vec.com2016)
+which(uniq.2018 %in% vec.com2018)
+
+uniq.2016 <- setdiff(vec.com2016, vec.com2018)
+length(uniq.2016) # 114
+
+which(uniq.2016 %in% vec.com2016)
+which(uniq.2016 %in% vec.com2018)
+
+
+# thanks to unlist(strsplit) and intersect functions. 
+# Intersect shows the exact common words in two vectors.
+.uniq.2018 <- unlist(strsplit(uniq.2018, " "))
+.uniq.2016 <- unlist(strsplit(uniq.2016, " "))
+cmnwrd <-  intersect(.uniq.2016, .uniq.2018)
+
+# After manual identification, I found these 48 companies in both 2016 and 2018 lists.
+# They changed their names from 2016 to 2018, thus they are now "New Companies" in 2018, 
+# though they are not identified in the previous analysis in R.
+cmncpn <- c("Costco",
+  "Verizon",
+  "JPMorgan Chase",
+  "Anixter International",
+  "Envision Healthcare",
+  "HCA Healthcare",
+  "Merck",
+  "Massachusetts Mutual Life Insurance",
+  "Sears Holdings",
+  "US Foods Holding",
+  "Hartford Financial Services",
+  "Jabil",
+  "Southern",
+  "Western & Southern Financial",
+  "PG&E Corp.",
+  "PNC Financial Services",
+  "Bank of New York Mellon",
+  "DaVita",
+  "Land O’Lakes",
+  "Toys “R” Us",
+  "Fidelity National Information Services",
+  "Dominion Energy",
+  "WestRock",
+  "Estee Lauder",
+  "Liberty Media",
+  "Newell Brands",
+  "Peter Kiewit Sons’",
+  "Mosaic",
+  "Thrivent Financial for Lutherans",
+  "PVH",
+  "O’Reilly Automotive",
+  "Dick’s Sporting Goods",
+  "Mutual of Omaha Insurance",
+  "Casey’s General Stores",
+  "EMCOR Group",
+  "Jones Financial (Edward Jones)",
+  "Expedia Group",
+  "Expeditors Intl. of Washington",
+  "Discovery",
+  "Dana",
+  "Wyndham Destinations",
+  "S&P Global",
+  "Booz Allen Hamilton",
+  "Lowe’s",
+  "Macy’s",
+  "McDonald’s",
+  "Kohl’s",
+  "Dillard’s"
+  )
+
+length(cmncpn)
+# Test if the common companies (cmncpn) are all in uniq.2018
+intersect(cmncpn, uniq.2018)
+
+
+# Mark the new companies as 1, new as comparing to 2016 list ---------------------------------------------
+
+
+
+# Delete these common companies from the unique list of 2018 leaving those companies that are
+# NEW in the 2018 list. 
+realuniq.2018 <- uniq.2018 [!uniq.2018 %in% cmncpn]
+
+# 114-48  [uniq.2018 - common companies in both 2016 and 2018]
+length(realuniq.2018)   # 66, in correspondence with the result above 
+
+intersect(realuniq.2018, ftn2018[,2]) # show all the NEW companies in ftn2018 list
+
+# Mark the new companies in the list as 1 in the 4th column. 
+for (i in 1:500) {
+  if (ftn2018[i,2] %in% realuniq.2018 == TRUE){
+    ftn2018[i,4] <- 1
+  }
+  else {
+    ftn2018[i,4] <- 0
+  }
+}
+
+# test if they are all marked by counting the number of "1"s in 4th column.
+table(ftn2018[,4])
+
+
+
+# Scrape the employees data -----------------------------------------------
+
+# parse it
+# Get all the company specific links here in "emp.links" 
+# which stands for Employee Data Links
+emp.links <- read_html(page_source[[1]]) %>%
+  html_nodes("a") %>% 
+  html_attr("href")
+
+# Clean these links and only keep the company links, and store in new ".emp.links" 
+.emp.links <- emp.links[-c(1:57)]
+head(.emp.links)
+.emp.links <- .emp.links[-c(502:518)]
+tail(.emp.links)
+length(.emp.links)
+
+# With manual check, find a link not a company link. 
+.emp.links[21] 
+.emp.links <- .emp.links[-c(21)]
+View(.emp.links)
+
+# Add a prefix of "http://fortune.com" to create right links of company sites
+crt.emplinks <- paste("http://fortune.com",.emp.links,sep = "")
+head(crt.emplinks)
+
+# Start to extract text from company sites
+# A trial on Apple.
+apple <- read_html("http://fortune.com/fortune500/apple/") %>% 
+  html_nodes("a") %>% 
+  html_nodes("span") %>% 
+  html_text() 
+
+apple[42]
+# the 42th element is the number of employees of the company.
+
+# Second trial on Walmart
+
+walmart <- read_html("http://fortune.com/fortune500/walmart/") %>% 
+  html_nodes("a") %>% 
+  html_nodes("span") %>% 
+  html_text() 
+
+walmart[42]
+
+# Start the scraping of 500 companies with loop.
+
+library(foreach)  
+# load a parallel execution function
+library(iterators)
+# Gives us the progress bar object.
+library(utils)
+# Some number of iterations to process.
+n <- length(crt.emplinks)
+# Create the progress bar.
+pb <- txtProgressBar(min = 1, max = n, style=3)
+# The foreach loop we are monitoring. This foreach loop will log2 all 
+# the values from 1 to n and then sum the result. 
+cmp.data <- foreach(i = icount(n), a=crt.emplinks) %do% {
+  setTxtProgressBar(pb, i)  
+  try(
+    read_html(a) %>% 
+      html_nodes("a") %>% 
+      html_nodes("span") %>% 
+      html_text() 
+  )
+}
+# Close the progress bar.
+close(pb)
+
+# View the data
+cmp.data
+View(cmp.data)
+
+# I got a few missing data here, so I find them out and scrape again. 
+missingdt <- which(lapply(cmp.data,class)=="try-error")
+missing.links <- crt.emplinks[c(missingdt)]  
+missing.links   # Here are the links with data missing
+
+# Give it another try to scrape the missing employee data from these 8 links.
+library(foreach)  
+# load a parallel execution function
+library(iterators)
+# Gives us the progress bar object.
+library(utils)
+# Some number of iterations to process.
+n <- length(missing.links)
+# Create the progress bar.
+pb <- txtProgressBar(min = 1, max = n, style=3)
+# The foreach loop we are monitoring. This foreach loop will log2 all 
+# the values from 1 to n and then sum the result. 
+.cmp.data <- foreach(i = icount(n), a=missing.links) %do% {
+  setTxtProgressBar(pb, i)  
+  try(
+    read_html(a) %>% 
+      html_nodes("a") %>% 
+      html_nodes("span") %>% 
+      html_text() 
+  )
+}
+# Close the progress bar.
+close(pb)
+
+# Another attempt to scrape the missing data doesn't work out.
+# With manual check, it's because the links can't be opened directly,
+# they can only be open by "transferring" from here "http://fortune.com/fortune500/list/"
+# So, I will copy the employee data of these links manually. 
+
+# Before that, I first filled the employee data I have into the 5th row of my data frame
+withdt <- which(lapply(cmp.data,class)!="try-error")
+
+for (i in withdt) {
+  lst <- cmp.data[[i]]
+  ftn2018[i,5] <- lst[42]
+}
+
+ftn2018[,5]
+View(ftn2018)
+
+
+# Then, I manually input the 8 missing employee data ------------------------------
+# [1]  47  63  90 159 175 233 304 376
+
+# 47, DowDuPont, http://fortune.com/fortune500/dowdupont/, Em: 98,000
+ftn2018[47,5] <- c("98,000")
+# 63, HCA Healthcare, http://fortune.com/fortune500/hca-healthcare/, 221,491
+ftn2018[63,5] <- c("221,491")
+# 90, Andeavor, http://fortune.com/fortune500/andeavor/, 14,300
+ftn2018[90,5] <- c("14,300")
+# 159, Jabil, http://fortune.com/fortune500/jabil/, 170,000
+ftn2018[159,5] <- c("170,000")
+# 175, Bank of New York Mellon, http://fortune.com/fortune500/bank-of-new-york-mellon/, 52,500
+ftn2018[175,5] <- c("52,500")
+# 233, Dominion Energy, http://fortune.com/fortune500/dominion-energy/, 16,200
+ftn2018[233,5] <- c("16,200")
+# 304, IQVIA Holdings, http://fortune.com/fortune500/iqvia-holdings/, 55,000
+ftn2018[304,5] <- c("55,000")
+# 376, Jones Financial (Edward Jones), http://fortune.com/fortune500/jones-financial-edward-jones/, 45,000
+ftn2018[376,5] <- c("45,000")
+
+
+# name the last two columns
+colnames(ftn2018)[4:5] = c("New_Fortune_500", "Employees")
+
+View(ftn2018)
+# produce the csv and xlsx file of the ftn2018 data -----------------------
+
+write.csv(ftn2018, file = "ftn2018.csv")
+write.xlsx(ftn2018, file = "ftn2018.xlsx")
+
+
+# Up to this step, I got info, including company name, rank, revenue, employee, 
+# from Fortune 500 2018 list and distinguished which companies are new in the list
+# comparing to the 2016 list.
+
+
+
+
